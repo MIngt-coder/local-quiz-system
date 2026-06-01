@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>期末速测台</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">速</span>
+          <div>
+            <strong>期末速测台</strong>
+            <small>LOCAL REVIEW DESK</small>
+          </div>
+        </div>
+        <nav>
+          <button class="nav-link active" data-view="dashboard">概览</button>
+          <button class="nav-link" data-view="upload">导入资料</button>
+          <button class="nav-link" data-view="library">题库</button>
+          <button class="nav-link" data-view="quiz">开始速测</button>
+          <button class="nav-link" data-view="records">复盘记录</button>
+          <button class="nav-link" data-view="settings">模型设置</button>
+        </nav>
+        <p class="sidebar-note">资料和答题记录只保存在这台电脑。</p>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">FINAL SPRINT</p>
+            <h1 id="page-title">今日复习面板</h1>
+          </div>
+          <button class="primary-btn" data-go="quiz">开始一轮速测</button>
+        </header>
+
+        <div id="notice" class="notice hidden"></div>
+
+        <section id="dashboard-view" class="view active"></section>
+
+        <section id="upload-view" class="view">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">IMPORT</p>
+              <h2>导入题目资料</h2>
+            </div>
+            <p>支持 Word、PDF、TXT。扫描版 PDF 暂不支持。</p>
+          </div>
+          <label class="drop-zone" for="file-input">
+            <input id="file-input" type="file" accept=".docx,.pdf,.txt">
+            <span class="drop-number">01</span>
+            <strong>选择一份期末复习文档</strong>
+            <small>识别后会先进入核对页面，不会直接写入题库。</small>
+          </label>
+          <div id="review-area"></div>
+        </section>
+
+        <section id="library-view" class="view">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">LIBRARY</p>
+              <h2>题库</h2>
+            </div>
+            <button class="secondary-btn" data-go="upload">继续导入</button>
+          </div>
+          <div id="document-list"></div>
+          <div id="library-list"></div>
+        </section>
+
+        <section id="quiz-view" class="view">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">SPRINT</p>
+              <h2>开始速测</h2>
+            </div>
+            <p>练习模式适合快速补漏，模拟考试适合最后自检。</p>
+          </div>
+          <div id="quiz-setup">
+            <form id="quiz-form" class="panel form-grid">
+              <label>模式
+                <select name="mode">
+                  <option value="practice">练习模式：每题立即看答案</option>
+                  <option value="exam">模拟考试：最后统一交卷</option>
+                </select>
+              </label>
+              <label>题量
+                <input name="count" type="number" min="1" max="100" value="10">
+              </label>
+              <label>题型
+                <select name="type">
+                  <option value="">全部题型</option>
+                  <option value="single">单选题</option>
+                  <option value="multiple">多选题</option>
+                  <option value="boolean">判断题</option>
+                  <option value="fill">填空题</option>
+                  <option value="short">简答题</option>
+                </select>
+              </label>
+              <label>考点
+                <select id="topic-filter" name="topic">
+                  <option value="">全部考点</option>
+                </select>
+              </label>
+              <label class="check-row"><input name="useVariants" type="checkbox"> 使用基础相似题强化</label>
+              <button class="primary-btn" type="submit">生成测验</button>
+            </form>
+          </div>
+          <div id="quiz-setup-summary" class="quiz-setup-summary hidden"></div>
+          <div id="quiz-stage"></div>
+        </section>
+
+        <section id="records-view" class="view">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">REVIEW</p>
+              <h2>复盘记录</h2>
+            </div>
+            <p>优先补薄弱考点，比重复刷整套题更省时间。</p>
+          </div>
+          <div id="records-list"></div>
+        </section>
+
+        <section id="settings-view" class="view">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">MODEL PLACEHOLDER</p>
+              <h2>模型设置</h2>
+            </div>
+          </div>
+          <div class="panel">
+            <p class="callout">首版仅保存设置，不会联网调用。后续可在这里启用高质量相似题生成。</p>
+            <form id="settings-form" class="stack-form">
+              <label>兼容 OpenAI 格式的接口地址<input name="apiBaseUrl" placeholder="https://example.com/v1"></label>
+              <label>密钥<input name="apiKey" type="password" placeholder="已保存的密钥不会明文显示"></label>
+              <label>模型名<input name="model" placeholder="例如：your-model-name"></label>
+              <button class="primary-btn" type="submit">保存设置</button>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

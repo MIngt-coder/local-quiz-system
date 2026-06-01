@@ -1,0 +1,14 @@
+{
+  "name": "local-quiz-system",
+  "version": "2026.06.01-003",
+  "private": true,
+  "description": "A local quiz system for importing question documents and running focused revision sessions.",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5"
+  }
+}

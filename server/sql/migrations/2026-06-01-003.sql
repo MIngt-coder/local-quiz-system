@@ -1,0 +1,1 @@
+ALTER TABLE quiz_answers ADD COLUMN score REAL NOT NULL DEFAULT 0;
