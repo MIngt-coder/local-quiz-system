@@ -1,6 +1,6 @@
 {
   "name": "local-quiz-system",
-  "version": "2026.06.01-004",
+  "version": "2026.06.02-006",
   "private": true,
   "description": "A local quiz system for importing question documents and running focused revision sessions.",
   "scripts": {

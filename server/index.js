@@ -216,7 +216,8 @@ function createServer(options = {}) {
 }
 
 function serveStatic(url, response) {
-  const requestedPath = url === "/" ? "/index.html" : url;
+  const pathOnly = url.split("?")[0];
+  const requestedPath = pathOnly === "/" ? "/index.html" : pathOnly;
   const allowedFiles = new Map([
     ["/index.html", ["index.html", "text/html; charset=utf-8"]],
     ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
@@ -228,7 +229,10 @@ function serveStatic(url, response) {
     response.end("未找到页面。");
     return;
   }
-  response.writeHead(200, { "Content-Type": file[1] });
+  response.writeHead(200, {
+    "Content-Type": file[1],
+    "Cache-Control": "no-store, max-age=0",
+  });
   response.end(fs.readFileSync(path.join(__dirname, "..", "public", file[0])));
 }
 

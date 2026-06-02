@@ -54,7 +54,7 @@ function parseSection(section) {
     ? splitGlossaryBlocks(section.lines)
     : splitSequentialNumberedBlocks(section.lines);
 
-  return blocks.map((block) => parseQuestionBlock(block, defaultType));
+  return blocks.map((block) => parseQuestionBlock(block, defaultType, section.title));
 }
 
 function inferSectionType(title) {
@@ -134,14 +134,14 @@ function splitQuestionBlocks(text) {
   });
 }
 
-function parseQuestionBlock(block, defaultType = "") {
+function parseQuestionBlock(block, defaultType = "", sectionTitle = "") {
   const lines = Array.isArray(block) ? cleanLines(block) : cleanLines(block);
   let explicitType = "";
   const options = [];
   const promptLines = [];
   let answerText = "";
   let explanation = "";
-  let topic = "未分类";
+  let topic = "";
   let activeField = "prompt";
 
   for (const originalLine of lines) {
@@ -179,7 +179,7 @@ function parseQuestionBlock(block, defaultType = "") {
 
     const topicMatch = line.match(/^(?:考点|知识点|Topic)\s*[:：]\s*(.*)$/i);
     if (topicMatch) {
-      topic = topicMatch[1].trim() || "未分类";
+      topic = topicMatch[1].trim();
       activeField = "topic";
       continue;
     }
@@ -201,6 +201,7 @@ function parseQuestionBlock(block, defaultType = "") {
     : [];
   const answer = normalizeAnswer(answerText, type, optionKeys);
   const hasInvalidChoiceKey = rawChoiceKeys.some((key) => !optionKeys.has(key));
+  const normalizedTopic = normalizeTopic(topic) || inferTopic({ prompt, answerText, explanation, sectionTitle });
 
   return {
     type,
@@ -208,7 +209,7 @@ function parseQuestionBlock(block, defaultType = "") {
     options,
     answer,
     explanation,
-    topic,
+    topic: normalizedTopic,
     needsReview:
       !prompt ||
       answer.length === 0 ||
@@ -216,6 +217,56 @@ function parseQuestionBlock(block, defaultType = "") {
       (["single", "multiple"].includes(type) && options.length < 2) ||
       (type === "single" && answer.length !== 1),
   };
+}
+
+function normalizeTopic(topic) {
+  const text = String(topic || "")
+    .replace(/^[《【\[]|[》】\]]$/g, "")
+    .replace(/(?:题目|答案|解析|零基础|相关知识拓展|选择题|单选题|多选题|判断题|填空题|简答题|问答题|名词解释)/g, "")
+    .replace(/[：:，,。；;、\s]+$/g, "")
+    .replace(/^[：:，,。；;、\s]+/g, "")
+    .trim();
+
+  if (!text || text.length < 2 || text.length > 18) return "";
+  return text;
+}
+
+function inferTopic({ prompt, answerText, explanation, sectionTitle }) {
+  const text = `${prompt}\n${answerText}\n${explanation}`;
+  const knownTopics = [
+    ["数据库索引", /索引|查询速度|B\+?树|B树|扫描数据/],
+    ["数据库事务", /事务|ACID|原子性|一致性|隔离性|持久性/],
+    ["数据完整性", /完整性|实体完整性|参照完整性|用户定义完整性/],
+    ["关系模型", /关系模型|关系数据库|关系代数/],
+    ["数据流图", /数据流图|DFD|结构化分析/],
+    ["需求工程", /需求工程|需求获取|需求分析|需求管理/],
+    ["可行性研究", /可行性|技术可行性|经济可行性|操作可行性|法律可行性/],
+    ["软件测试", /软件测试|测试用例|集成测试|单元测试|系统测试/],
+    ["黑盒测试", /黑盒测试|功能测试|输入和输出/],
+    ["白盒测试", /白盒测试|结构测试|路径覆盖|语句覆盖/],
+    ["软件设计", /概要设计|详细设计|模块设计|接口设计|内聚|耦合/],
+    ["螺旋模型", /螺旋模型|风险分析/],
+    ["瀑布模型", /瀑布模型|顺序阶段/],
+    ["进程与线程", /进程|线程|资源分配|调度执行/],
+    ["CPU 调度", /CPU|调度算法|时间片|优先级调度/],
+    ["网络协议", /网络协议|TCP|UDP|HTTP|IP协议|面向连接/],
+    ["缓存机制", /缓存|缓存雪崩|缓存穿透|缓存击穿/],
+  ];
+
+  const matched = knownTopics.find(([, pattern]) => pattern.test(text));
+  if (matched) return matched[0];
+
+  const sectionTopic = normalizeTopic(sectionTitle);
+  if (sectionTopic) return sectionTopic;
+
+  const compact = text.replace(/\s+/g, "");
+  const leadMatch = compact.match(/^([\u4e00-\u9fa5A-Za-z0-9]{2,12})(?:的|是|指|主要|最显著|基本|包含|包括|有哪些|是什么)/);
+  if (leadMatch) return leadMatch[1];
+
+  const bracketMatch = compact.match(/[（(]([\u4e00-\u9fa5A-Za-z0-9]{2,12})[）)]/);
+  if (bracketMatch) return bracketMatch[1];
+
+  return "未分类";
 }
 
 function cleanLines(value) {

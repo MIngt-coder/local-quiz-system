@@ -8,6 +8,8 @@ const state = {
   quiz: null,
   quizIndex: 0,
   examAnswers: new Map(),
+  quizStartedAt: null,
+  quizAdvanceTimer: null,
 };
 
 const typeLabels = {
@@ -62,7 +64,8 @@ function showView(view) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadDashboard(), loadDocuments(), loadQuestions(), loadSettings()]);
+  await Promise.all([loadDocuments(), loadQuestions(), loadSettings()]);
+  await loadDashboard();
   await loadRecords();
 }
 
@@ -159,9 +162,23 @@ function renderReview() {
         <button id="confirm-import" class="primary-btn">确认入库</button>
       </div>
     </div>
+    ${renderPreviewSummary()}
     ${state.reviewLayout === "table" ? reviewTable() : `<div class="review-grid">${state.preview.map(reviewCard).join("")}</div>`}`);
   $("#confirm-import").addEventListener("click", confirmImport);
   bindAll("[data-review-layout]", "click", switchReviewLayout);
+}
+
+function renderPreviewSummary() {
+  const topicCounts = summarizeTopics(state.preview);
+  const reviewCount = state.preview.filter((question) => question.needsReview).length;
+  return `<div class="panel topic-overview">
+    <div>
+      <p class="eyebrow">FOCUS MAP</p>
+      <strong>已归纳 ${topicCounts.length} 个考点</strong>
+      <span class="muted">${reviewCount ? `${reviewCount} 道题建议人工确认` : "题型、答案和考点均已初步识别"}</span>
+    </div>
+    <div class="topic-pills">${topicCounts.slice(0, 8).map((item) => `<span class="topic-pill">${escapeHtml(item.topic)} · ${item.count}</span>`).join("")}</div>
+  </div>`;
 }
 
 function switchReviewLayout(event) {
@@ -266,11 +283,44 @@ function parseOptions(value) {
 async function loadQuestions() {
   state.questions = await api("/api/questions");
   const list = $("#library-list");
-  list.innerHTML = state.questions.length ? `<div class="list-stack">${state.questions.map(libraryRow).join("")}</div>` : empty("题库还是空的，先导入一份复习资料。");
+  const topicCounts = summarizeTopics(state.questions);
+  list.innerHTML = state.questions.length ? `${renderTopicManager(topicCounts)}<div class="list-stack">${state.questions.map(libraryRow).join("")}</div>` : empty("题库还是空的，先导入一份复习资料。");
   bindAll("[data-delete-question]", "click", deleteQuestion, list);
   bindAll("[data-edit-question]", "click", editQuestion, list);
-  const topics = [...new Set(state.questions.map((question) => question.topic))];
+  bindAll("[data-rename-topic]", "click", renameTopic, list);
+  bindAll("[data-library-practice-topic]", "click", startLibraryTopicPractice, list);
+  const topics = topicCounts.map((item) => item.topic);
   setHtml("#topic-filter", `<option value="">全部考点</option>${topics.map((topic) => `<option value="${escapeHtml(topic)}">${escapeHtml(topic)}</option>`).join("")}`);
+}
+
+function summarizeTopics(questions) {
+  const counts = new Map();
+  questions.forEach((question) => {
+    const topic = question.topic || "未分类";
+    counts.set(topic, (counts.get(topic) || 0) + 1);
+  });
+  return [...counts].map(([topic, count]) => ({ topic, count })).sort((left, right) => right.count - left.count || left.topic.localeCompare(right.topic, "zh-Hans-CN"));
+}
+
+function renderTopicManager(topicCounts) {
+  return `<div class="panel topic-manager">
+    <div class="topic-manager-head">
+      <div>
+        <p class="eyebrow">FOCUS MAP</p>
+        <h3>考点整理</h3>
+      </div>
+      <span class="muted">${topicCounts.length} 个考点 · 可批量改名后再练习</span>
+    </div>
+    <div class="topic-grid">
+      ${topicCounts.map((item) => `<div class="topic-chip-row">
+        <span><strong>${escapeHtml(item.topic)}</strong><span class="muted">${item.count} 道题</span></span>
+        <span class="topic-row-actions">
+          <button class="secondary-btn slim-btn" data-library-practice-topic="${escapeHtml(item.topic)}">练习</button>
+          <button class="secondary-btn slim-btn" data-rename-topic="${escapeHtml(item.topic)}">改名</button>
+        </span>
+      </div>`).join("")}
+    </div>
+  </div>`;
 }
 
 function libraryRow(question) {
@@ -300,6 +350,25 @@ async function editQuestion(event) {
   await refreshAll();
 }
 
+async function renameTopic(event) {
+  const oldTopic = event.currentTarget.dataset.renameTopic;
+  const newTopic = promptWindow("把这个考点统一改成", oldTopic);
+  if (newTopic === null) return;
+  const topic = newTopic.trim();
+  if (!topic || topic === oldTopic) return;
+  const questions = state.questions.filter((question) => question.topic === oldTopic);
+  await Promise.all(questions.map((question) => api(`/api/questions/${question.id}`, {
+    method: "PUT",
+    body: JSON.stringify({ ...question, topic }),
+  })));
+  notice(`已将 ${questions.length} 道题归到“${topic}”。`);
+  await refreshAll();
+}
+
+function startLibraryTopicPractice(event) {
+  startTopicPractice(event.currentTarget.dataset.libraryPracticeTopic);
+}
+
 function promptWindow(label, value) {
   return window.prompt(label, value);
 }
@@ -320,6 +389,7 @@ async function startQuiz(event) {
     });
     state.quizIndex = 0;
     state.examAnswers = new Map();
+    state.quizStartedAt = Date.now();
     collapseQuizSetup();
     renderQuizQuestion();
     $("#quiz-stage").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -346,65 +416,240 @@ function expandQuizSetup() {
 }
 
 function renderQuizQuestion() {
+  clearQuizAdvanceTimer();
   const question = state.quiz.questions[state.quizIndex];
+  const progress = Math.round(((state.quizIndex + 1) / state.quiz.questions.length) * 100);
+  const selectedAnswer = state.quiz.mode === "exam" ? (state.examAnswers.get(question.id) || []) : [];
   setHtml("#quiz-stage", `
-    <article class="question-card">
-      <div class="question-top"><span class="badge">${state.quiz.mode === "exam" ? "模拟考试" : "练习模式"} · ${state.quizIndex + 1}/${state.quiz.questions.length}</span><span class="muted">${escapeHtml(question.topic)}</span></div>
-      <h3>${escapeHtml(question.prompt)}</h3>
-      <form id="answer-form">
-        ${answerFields(question)}
-        <button class="primary-btn" type="submit">${state.quiz.mode === "exam" && state.quizIndex === state.quiz.questions.length - 1 ? "交卷" : "提交答案"}</button>
-      </form>
-      <div id="answer-feedback"></div>
-    </article>`);
-  $("#answer-form").addEventListener("submit", submitQuizAnswer);
+    <div class="exam-workbench">
+      <article class="question-card">
+        <div class="question-top"><span class="badge">${state.quiz.mode === "exam" ? "模拟考试" : "练习模式"} · ${state.quizIndex + 1}/${state.quiz.questions.length}</span><span class="muted">${typeLabels[question.type]} · ${escapeHtml(question.topic)}</span></div>
+        <div class="quiz-progress" aria-label="答题进度"><span style="width: ${progress}%"></span></div>
+        <h3>${escapeHtml(question.prompt)}</h3>
+        <form id="answer-form">
+          ${answerFields(question, selectedAnswer)}
+          ${renderQuestionControls(question)}
+        </form>
+        <div id="answer-feedback"></div>
+      </article>
+      ${state.quiz.mode === "exam" ? renderExamNavigator() : renderQuestionAssistant(question)}
+    </div>`);
+  const form = $("#answer-form");
+  form.addEventListener("submit", submitQuizAnswer);
+  form.addEventListener("change", handleAnswerChange);
+  form.addEventListener("keydown", handleAnswerKeydown);
+  bindAll("[data-quiz-index]", "click", jumpToQuizQuestion, $("#quiz-stage"));
+  bindAll("[data-exam-nav]", "click", handleExamNavigation, $("#quiz-stage"));
 }
 
-function answerFields(question) {
+function renderQuestionControls(question) {
+  if (state.quiz.mode === "exam") return renderExamControls();
+  if (isAutoSubmitQuestion(question)) {
+    return `<p class="inline-hint">点选选项后会自动判分。</p>`;
+  }
+  return `<button class="primary-btn" type="submit">提交答案</button>`;
+}
+
+function answerFields(question, selectedAnswer = []) {
   if (question.options.length) {
     const inputType = question.type === "multiple" ? "checkbox" : "radio";
-    return `<div class="choice-list">${question.options.map((option) => `<label class="choice-line"><input type="${inputType}" name="answer" value="${option.key}"><strong>${option.key}</strong> ${escapeHtml(option.text)}</label>`).join("")}</div>`;
+    return `<div class="choice-list">${question.options.map((option) => `<label class="choice-line ${inputType === "radio" ? "instant-choice" : ""}"><input type="${inputType}" name="answer" value="${option.key}" ${selectedAnswer.includes(option.key) ? "checked" : ""}><strong>${option.key}</strong> ${escapeHtml(option.text)}</label>`).join("")}</div>`;
   }
   if (question.type === "boolean") {
-    return `<div class="choice-list"><label class="choice-line"><input type="radio" name="answer" value="正确">正确</label><label class="choice-line"><input type="radio" name="answer" value="错误">错误</label></div>`;
+    return `<div class="choice-list"><label class="choice-line instant-choice"><input type="radio" name="answer" value="正确" ${selectedAnswer.includes("正确") ? "checked" : ""}>正确</label><label class="choice-line instant-choice"><input type="radio" name="answer" value="错误" ${selectedAnswer.includes("错误") ? "checked" : ""}>错误</label></div>`;
   }
-  return `<label class="choice-list">你的答案<textarea name="text-answer" placeholder="在这里作答"></textarea></label>`;
+  return `<label class="choice-list">你的答案<textarea name="text-answer" placeholder="在这里作答">${escapeHtml(selectedAnswer[0] || "")}</textarea></label>`;
+}
+
+function renderExamControls() {
+  const isFirst = state.quizIndex === 0;
+  const isLast = state.quizIndex === state.quiz.questions.length - 1;
+  return `<div class="actions exam-actions">
+    <button class="secondary-btn" type="button" data-exam-nav="prev" ${isFirst ? "disabled" : ""}>上一题</button>
+    <button class="primary-btn" type="button" data-exam-nav="${isLast ? "submit" : "next"}">${isLast ? "交卷" : "下一题"}</button>
+  </div>`;
+}
+
+function renderExamNavigator() {
+  const answeredCount = state.quiz.questions.filter((question) => state.examAnswers.has(question.id)).length;
+  const elapsed = state.quizStartedAt ? Math.max(0, Math.round((Date.now() - state.quizStartedAt) / 60000)) : 0;
+  return `<aside class="exam-side panel">
+    <p class="eyebrow">ANSWER CARD</p>
+    <h3>答题卡</h3>
+    <div class="exam-metrics">
+      <span><strong>${answeredCount}</strong><small>已答</small></span>
+      <span><strong>${state.quiz.questions.length - answeredCount}</strong><small>未答</small></span>
+      <span><strong>${elapsed}</strong><small>分钟</small></span>
+    </div>
+    <div class="answer-sheet">
+      ${state.quiz.questions.map((question, index) => `<button class="${[
+        "sheet-cell",
+        index === state.quizIndex ? "active" : "",
+        state.examAnswers.has(question.id) ? "answered" : "",
+      ].filter(Boolean).join(" ")}" data-quiz-index="${index}" type="button">${index + 1}</button>`).join("")}
+    </div>
+    <p class="shortcut-note">点选即保存。数字键选项，←/→ 切题，Ctrl+Enter 交卷或下一题。</p>
+  </aside>`;
+}
+
+function renderQuestionAssistant(question) {
+  return `<aside class="exam-side panel">
+    <p class="eyebrow">FOCUS</p>
+    <h3>本题定位</h3>
+    <p class="muted">${typeLabels[question.type]}</p>
+    <span class="topic-pill">${escapeHtml(question.topic)}</span>
+    <p class="shortcut-note">单选和判断点选后自动提交；输入题可按 Ctrl+Enter 提交。</p>
+  </aside>`;
 }
 
 async function submitQuizAnswer(event) {
   event.preventDefault();
-  const question = state.quiz.questions[state.quizIndex];
-  const answer = collectAnswer(event.target);
   if (state.quiz.mode === "exam") {
-    state.examAnswers.set(question.id, answer);
-    if (state.quizIndex < state.quiz.questions.length - 1) {
-      state.quizIndex += 1;
-      renderQuizQuestion();
-      return;
-    }
-    const result = await api(`/api/quizzes/${state.quiz.id}/submit`, {
-      method: "POST",
-      body: JSON.stringify({ answers: [...state.examAnswers].map(([questionId, value]) => ({ questionId, answer: value })) }),
-    });
-    renderCompletion(result);
-    await refreshAll();
+    await navigateExam(event.submitter?.dataset.examNav || "next");
     return;
   }
-  const result = await api(`/api/quizzes/${state.quiz.id}/answer`, {
-    method: "POST",
-    body: JSON.stringify({ questionId: question.id, answer }),
-  });
-  const feedback = $("#answer-feedback");
-  feedback.innerHTML = `${renderAnswerFeedback(result)}<div class="actions feedback-actions"><button id="next-question" class="secondary-btn">${result.completed ? "查看记录" : "下一题"}</button></div>`;
-  $("#next-question").addEventListener("click", async () => {
-    if (result.completed) {
-      await refreshAll();
-      showView("records");
-    } else {
-      state.quizIndex += 1;
-      renderQuizQuestion();
+  await submitPracticeAnswer(event.target);
+}
+
+function handleAnswerChange(event) {
+  const form = event.currentTarget;
+  const question = state.quiz.questions[state.quizIndex];
+  if (state.quiz.mode === "exam") {
+    setExamAnswer(question.id, collectAnswer(form));
+    refreshExamSide();
+    if (shouldAutoAdvance(question, event.target)) {
+      state.quizAdvanceTimer = setTimeout(() => navigateExam("next", { skipSave: true }), 180);
     }
+    return;
+  }
+
+  if (shouldAutoSubmitPractice(question, event.target)) {
+    submitPracticeAnswer(form);
+  }
+}
+
+function handleAnswerKeydown(event) {
+  if (!state.quiz) return;
+  const form = event.currentTarget;
+  const activeTag = event.target.tagName.toLowerCase();
+
+  if (/^[1-8]$/.test(event.key) && activeTag !== "textarea") {
+    const option = $$('[name="answer"]', form)[Number(event.key) - 1];
+    if (option) {
+      event.preventDefault();
+      if (option.type === "checkbox") option.checked = !option.checked;
+      else option.checked = true;
+      option.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return;
+  }
+
+  if (state.quiz.mode === "exam" && activeTag !== "textarea" && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+    event.preventDefault();
+    navigateExam(event.key === "ArrowLeft" ? "prev" : "next");
+    return;
+  }
+
+  if (event.ctrlKey && event.key === "Enter") {
+    event.preventDefault();
+    if (state.quiz.mode === "exam") {
+      navigateExam(state.quizIndex === state.quiz.questions.length - 1 ? "submit" : "next");
+    } else {
+      submitPracticeAnswer(form);
+    }
+  }
+}
+
+async function submitPracticeAnswer(form) {
+  if (form.dataset.submitting === "true" || form.dataset.submitted === "true") return;
+  form.dataset.submitting = "true";
+  const question = state.quiz.questions[state.quizIndex];
+  const answer = collectAnswer(form);
+  try {
+    const result = await api(`/api/quizzes/${state.quiz.id}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ questionId: question.id, answer }),
+    });
+    form.dataset.submitted = "true";
+    $$("input, textarea, button", form).forEach((item) => {
+      item.disabled = true;
+    });
+    const feedback = $("#answer-feedback");
+    feedback.innerHTML = `${renderAnswerFeedback(result)}<div class="actions feedback-actions"><button id="next-question" class="secondary-btn">${result.completed ? "查看记录" : "下一题"}</button></div>`;
+    $("#next-question").addEventListener("click", async () => advancePracticeQuiz(result));
+    $("#next-question").focus();
+  } catch (error) {
+    notice(error.message, true);
+  } finally {
+    form.dataset.submitting = "false";
+  }
+}
+
+async function advancePracticeQuiz(result) {
+  if (result.completed) {
+    await refreshAll();
+    showView("records");
+  } else {
+    state.quizIndex += 1;
+    renderQuizQuestion();
+  }
+}
+
+function shouldAutoSubmitPractice(question, target) {
+  return isAutoSubmitQuestion(question) && target.name === "answer";
+}
+
+function shouldAutoAdvance(question, target) {
+  return isAutoSubmitQuestion(question) &&
+    target.name === "answer" &&
+    state.quizIndex < state.quiz.questions.length - 1;
+}
+
+function isAutoSubmitQuestion(question) {
+  return ["single", "boolean"].includes(question.type);
+}
+
+async function handleExamNavigation(event) {
+  await navigateExam(event.currentTarget.dataset.examNav);
+}
+
+async function navigateExam(action, options = {}) {
+  clearQuizAdvanceTimer();
+  if (!options.skipSave) saveCurrentExamAnswer();
+
+  if (action === "prev") {
+    state.quizIndex = Math.max(0, state.quizIndex - 1);
+    renderQuizQuestion();
+    return;
+  }
+
+  if (action === "next" && state.quizIndex < state.quiz.questions.length - 1) {
+    state.quizIndex += 1;
+    renderQuizQuestion();
+    return;
+  }
+
+  if (action !== "submit" && state.quizIndex < state.quiz.questions.length - 1) return;
+  if (!confirm("确认交卷吗？交卷后会生成复盘记录。")) return;
+  const result = await api(`/api/quizzes/${state.quiz.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ answers: [...state.examAnswers].map(([questionId, value]) => ({ questionId, answer: value })) }),
   });
+  renderCompletion(result);
+  await refreshAll();
+}
+
+function refreshExamSide() {
+  const side = $(".exam-side");
+  if (!side || state.quiz.mode !== "exam") return;
+  side.outerHTML = renderExamNavigator();
+  bindAll("[data-quiz-index]", "click", jumpToQuizQuestion, $("#quiz-stage"));
+}
+
+function clearQuizAdvanceTimer() {
+  if (!state.quizAdvanceTimer) return;
+  clearTimeout(state.quizAdvanceTimer);
+  state.quizAdvanceTimer = null;
 }
 
 function collectAnswer(form) {
@@ -414,7 +659,7 @@ function collectAnswer(form) {
 }
 
 function renderCompletion(result) {
-  setHtml("#quiz-stage", `<div class="panel"><p class="eyebrow">COMPLETED</p><h2>本轮完成</h2><p>本轮得分 <strong>${formatScore(result.correctCount)}</strong> / ${result.scorableCount}</p><button class="secondary-btn" data-go="records">查看复盘记录</button></div>`);
+  setHtml("#quiz-stage", `<div class="panel completion-panel"><p class="eyebrow">COMPLETED</p><h2>本轮完成</h2><p>本轮得分 <strong>${formatScore(result.correctCount)}</strong> / ${result.scorableCount}</p><button class="secondary-btn" data-go="records">查看复盘记录</button></div>`);
 }
 
 async function loadRecords() {
@@ -438,11 +683,15 @@ function renderHistory(items, interactive = false) {
 }
 
 function startWeakTopicPractice(event) {
+  startTopicPractice(event.target.dataset.practiceTopic);
+}
+
+function startTopicPractice(topic) {
   const form = $("#quiz-form");
   showView("quiz");
   expandQuizSetup();
   form.elements.mode.value = "practice";
-  form.elements.topic.value = event.target.dataset.practiceTopic;
+  form.elements.topic.value = topic;
   form.elements.useVariants.checked = true;
   form.requestSubmit();
 }
@@ -462,6 +711,29 @@ async function showQuizDetails(event) {
         </article>`).join("")}
     </div>`);
   $("#quiz-details").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function jumpToQuizQuestion(event) {
+  saveCurrentExamAnswer();
+  state.quizIndex = Number(event.currentTarget.dataset.quizIndex);
+  renderQuizQuestion();
+}
+
+function saveCurrentExamAnswer() {
+  if (!state.quiz || state.quiz.mode !== "exam") return;
+  const form = $("#answer-form");
+  if (!form) return;
+  const question = state.quiz.questions[state.quizIndex];
+  setExamAnswer(question.id, collectAnswer(form));
+}
+
+function setExamAnswer(questionId, answer) {
+  const hasAnswer = (answer || []).some((item) => String(item || "").trim());
+  if (hasAnswer) {
+    state.examAnswers.set(questionId, answer);
+  } else {
+    state.examAnswers.delete(questionId);
+  }
 }
 
 async function loadSettings() {
@@ -486,15 +758,17 @@ function empty(text) {
 }
 
 function renderAnswerFeedback(result) {
-  const keywordLines = [
-    result.matchedKeywords?.length ? `命中关键词：${escapeHtml(result.matchedKeywords.join("、"))}` : "",
-    result.missingKeywords?.length ? `还差关键词：${escapeHtml(result.missingKeywords.join("、"))}` : "",
-  ].filter(Boolean).join("<br>");
   return `<div class="answer-box ${result.isCorrect ? "" : "wrong"}">
     <strong>${result.isCorrect ? "已拿到本题主要分数" : "需要再看一眼"} · 得分 ${formatScore(result.score)} / ${result.maxScore || 1}</strong><br>
     参考答案：${escapeHtml(result.answer.join(" / "))}<br>
-    ${keywordLines ? `${keywordLines}<br>` : ""}${escapeHtml(result.explanation || "暂无解析")}
+    ${renderKeywordChips("命中", result.matchedKeywords, "hit")}
+    ${renderKeywordChips("还差", result.missingKeywords, "miss")}
+    <span class="feedback-note">${escapeHtml(result.explanation || "暂无解析")}</span>
   </div>`;
+}
+
+function renderKeywordChips(label, keywords = [], className = "") {
+  return keywords.length ? `<div class="keyword-row"><span>${label}：</span>${keywords.map((keyword) => `<b class="${className}">${escapeHtml(keyword)}</b>`).join("")}</div>` : "";
 }
 
 function formatScore(value) {

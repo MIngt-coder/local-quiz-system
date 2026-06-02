@@ -136,3 +136,28 @@ test("keeps numbered details inside a multiline short answer", () => {
   assert.deepEqual(questions[0].answer, ["1. 算法逻辑设计\n2. 数据结构设计"]);
   assert.equal(questions[1].prompt, "什么是需求工程？");
 });
+
+test("infers focused topics when the document does not provide clean topic labels", () => {
+  const questions = parseQuestions(`
+一、选择题：题目、答案和零基础解析
+1. 在结构化分析方法中，用于描述系统数据流动和处理过程的图形工具是（）。
+A. UML图
+B. 数据流图（DFD）
+C. 程序流程图
+D. 实体联系图
+答案：B
+
+二、填空题：题目、答案和零基础解析
+1. 螺旋模型最显著的特点是引入了________分析。
+答案：风险
+
+三、简答题：题目、答案和零基础解析
+1. 请说明需求工程的主要工作。
+答案：需求工程包括需求获取、需求分析和需求管理。
+  `);
+
+  assert.deepEqual(
+    questions.map((question) => question.topic),
+    ["数据流图", "螺旋模型", "需求工程"],
+  );
+});
